@@ -4,6 +4,10 @@ import json
 import calendar
 from datetime import datetime, date, timedelta
 from pathlib import Path
+try:
+    import winreg as _winreg
+except ImportError:
+    _winreg = None
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton,
@@ -864,7 +868,7 @@ class DayButton(QPushButton):
                 p.setPen(QColor(255, 255, 255, 230))
                 txt_x = x0 + 4
                 max_w = W - txt_x - 4
-                star  = (important + " ") if isinstance(important, str) and important else ("★ " if important else "")
+                star  = important if isinstance(important, str) and important else ("★" if important else "")
                 txt   = fm.elidedText(star + title, Qt.ElideRight, max_w)
                 p.drawText(txt_x, y + bh_cur - 1, txt)
                 if important:
@@ -902,7 +906,7 @@ class DayButton(QPushButton):
                 p.setFont(imp_f); fm = p.fontMetrics()
             p.setPen(QColor(255, 255, 255, 230))
             max_w = bw - 8
-            star  = "★ " if important else ""
+            star  = important if isinstance(important, str) and important else ("★" if important else "")
             txt   = fm.elidedText(star + title, Qt.ElideRight, max_w)
             p.drawText(x0 + 4, y + bh_cur - 1, txt)
             if important:
@@ -924,7 +928,50 @@ class DayButton(QPushButton):
 # ════════════════════════════════════════════════════════════
 #  일정 수정 다이얼로그
 # ════════════════════════════════════════════════════════════
+# ── 자동실행 레지스트리 헬퍼 ─────────────────────────────────
+_AUTOSTART_REG = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_APP_NAME      = "아트인캘린더"
+
+def _get_autostart_exe():
+    return sys.executable if getattr(sys, "frozen", False) else None
+
+def _is_autostart():
+    if _winreg is None:
+        return False
+    try:
+        key = _winreg.OpenKey(_winreg.HKEY_CURRENT_USER, _AUTOSTART_REG, 0, _winreg.KEY_READ)
+        _winreg.QueryValueEx(key, _APP_NAME)
+        _winreg.CloseKey(key)
+        return True
+    except Exception:
+        return False
+
+def _set_autostart(enabled: bool):
+    if _winreg is None:
+        return
+    try:
+        key = _winreg.OpenKey(_winreg.HKEY_CURRENT_USER, _AUTOSTART_REG, 0, _winreg.KEY_SET_VALUE)
+        if enabled:
+            exe = _get_autostart_exe()
+            if exe:
+                _winreg.SetValueEx(key, _APP_NAME, 0, _winreg.REG_SZ, exe)
+        else:
+            try:
+                _winreg.DeleteValue(key, _APP_NAME)
+            except FileNotFoundError:
+                pass
+        _winreg.CloseKey(key)
+    except Exception:
+        pass
+
 PRESET_COLORS = ["#a099ff", "#ff6b6b", "#ffd93d", "#6bcb77", "#4d96ff", "#ff922b", "#f06bce"]
+_CAT_COLORS = {
+    "★[중요]": "#9c27b0",   # 보라
+    "★[제출]": "#f44336",   # 빨간
+    "★[투찰]": "#ff9800",   # 주황
+    "★[준공]": "#4caf50",   # 녹색
+    "★[착공]": "#1565c0",   # 남색
+}
 
 class EditEventDialog(QDialog):
     """기존 일정 한 개를 수정하는 다이얼로그"""
@@ -1017,7 +1064,7 @@ class EditEventDialog(QDialog):
         layout.addLayout(r2)
 
         # 중요일정 콤보박스
-        _IMPORTANT_CATS = ["없음", "★[중요일정]", "★[제출]", "★[투찰]", "★[준공]", "★[착공]"]
+        _IMPORTANT_CATS = ["없음", "★[중요]", "★[제출]", "★[투찰]", "★[준공]", "★[착공]"]
         imp_row = QHBoxLayout()
         imp_row.addWidget(self._lbl("중요도:", size=10))
         self.cmb_important = QComboBox()
@@ -1036,6 +1083,10 @@ class EditEventDialog(QDialog):
         imp_row.addWidget(self.cmb_important)
         imp_row.addStretch()
         layout.addLayout(imp_row)
+        def _auto_color_edit():
+            c = _CAT_COLORS.get(self.cmb_important.currentText())
+            if c: self._apply_preset(c)
+        self.cmb_important.currentIndexChanged.connect(lambda _: _auto_color_edit())
 
         layout.addStretch()
         br = QHBoxLayout()
@@ -1182,7 +1233,7 @@ class EventDialog(QDialog):
         layout.addLayout(r2)
 
         # 중요일정 콤보박스
-        _IMPORTANT_CATS = ["없음", "★[중요일정]", "★[제출]", "★[투찰]", "★[준공]", "★[착공]"]
+        _IMPORTANT_CATS = ["없음", "★[중요]", "★[제출]", "★[투찰]", "★[준공]", "★[착공]"]
         imp_row = QHBoxLayout()
         imp_row.addWidget(self._lbl("중요도:", size=10))
         self.cmb_important = QComboBox()
@@ -1196,6 +1247,10 @@ class EventDialog(QDialog):
         imp_row.addWidget(self.cmb_important)
         imp_row.addStretch()
         layout.addLayout(imp_row)
+        def _auto_color_add():
+            c = _CAT_COLORS.get(self.cmb_important.currentText())
+            if c: self._apply_preset(c)
+        self.cmb_important.currentIndexChanged.connect(lambda _: _auto_color_add())
 
         br = QHBoxLayout()
         btn_add = QPushButton("➕ 일정 추가"); btn_add.clicked.connect(self._add_event)
@@ -1240,7 +1295,7 @@ class EventDialog(QDialog):
             end       = ev.get("end_date","")
             range_txt = f"  📅~{end}" if end and end != self.day.strftime("%Y-%m-%d") else ""
             time_txt  = f"[{ev['time']}] " if ev.get("time") else ""
-            star      = (important + " ") if isinstance(important, str) and important else ("★ " if important else "")
+            star      = important if isinstance(important, str) and important else ("★" if important else "")
             body      = f"{star}{time_txt}{ev.get('title','')}{range_txt}"
             if ev.get("memo"): body += f"\n📝 {ev['memo']}"
             font_size  = 14 if important else 11
@@ -1492,6 +1547,19 @@ class SettingsDialog(QDialog):
         rf.addWidget(self.sld_f); rf.addWidget(self.lbl_f); sl.addLayout(rf)
         layout.addWidget(sz)
 
+        # ── 시작 설정 ──────────────────────────────────────────
+        st = QGroupBox("🚀  시작 설정"); stl = QVBoxLayout(st)
+        self.chk_autostart = QCheckBox("부팅 시 자동 실행")
+        self.chk_autostart.setChecked(self.new_config.get("autostart", True))
+        self.chk_autostart.setStyleSheet(
+            "QCheckBox { color:white; font-size:11px; spacing:6px; }"
+            "QCheckBox::indicator { width:16px; height:16px; border-radius:4px;"
+            " border:1px solid rgba(108,99,255,0.5); background:rgba(255,255,255,0.05); }"
+            "QCheckBox::indicator:checked { background:rgba(108,99,255,0.7);"
+            " border:1px solid #a099ff; }")
+        stl.addWidget(self.chk_autostart)
+        layout.addWidget(st)
+
         layout.addStretch()
 
         br = QHBoxLayout()
@@ -1520,7 +1588,7 @@ class SettingsDialog(QDialog):
         self._custom_panel.setEnabled(is_custom)
         self._custom_panel.setVisible(is_custom)
         # 다이얼로그 높이 동적 조정
-        self.setFixedSize(460, 680 if is_custom else 580)
+        self.setFixedSize(460, 750 if is_custom else 650)
 
     def _pick_bg(self):
         c = QColorDialog.getColor(QColor(self._bg), self)
@@ -1568,6 +1636,7 @@ class SettingsDialog(QDialog):
             acc     = self._ac
             tc      = self._tc
 
+        autostart = self.chk_autostart.isChecked()
         self.new_config.update({
             "firebase"    : {"url": self.fb_url.text().strip(),
                              "group_id": self.group_id.text().strip()},
@@ -1580,7 +1649,9 @@ class SettingsDialog(QDialog):
             "cal_width"   : self.sld_w.value(),
             "cal_height"  : self.sld_h.value(),
             "font_scale"  : self.sld_f.value() / 100.0,
+            "autostart"   : autostart,
         })
+        _set_autostart(autostart)
         self.accept()
 
     def _lbl(self, text, color="white", size=11, bold=False):
@@ -1793,6 +1864,9 @@ if __name__ == "__main__":
 
     win = ArtInCalendar()
     win.show()
+
+    # 자동실행 설정 적용 (config 기본값 True → 첫 실행 시 자동 등록)
+    _set_autostart(win.config.get("autostart", True))
 
     # 백그라운드 업데이트 체크 (시작 2초 후)
     def _check_update_bg():

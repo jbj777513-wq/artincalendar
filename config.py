@@ -22,7 +22,8 @@ DEFAULT_CONFIG = {
     "firebase": {
         "url": "",
         "group_id": ""
-    }
+    },
+    "autostart": True,
 }
 
 
