@@ -124,7 +124,7 @@ def check_update(timeout=8):
         return {
             "version"     : latest_tag,
             "download_url": dl_url,
-            "notes"       : data.get("body", "")[:300],
+            "notes"       : (data.get("body") or "")[:300],
         }
     except Exception as e:
         print(f"[Updater] check_update 오류: {e}")
