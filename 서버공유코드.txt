@@ -1,0 +1,5 @@
+Realtime DB URL:
+https://artincalendar-b8963-default-rtdb.firebaseio.com/
+
+그룹 ID:
+ARTIN

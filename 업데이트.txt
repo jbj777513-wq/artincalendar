@@ -1,0 +1,30 @@
+앞으로 업데이트할 때마다 아래 순서만 반복하면 됩니다.
+
+1
+updater.py
+의 VERSION 숫자 올리기
+
+VERSION      = "1.0.2"          # 현재 버전 (릴리스 태그와 동일하게 관리)
+GITHUB_OWNER = "jbj777513-wq" # ← GitHub 사용자명으로 변경
+GITHUB_REPO  = "artincalendar"  # ← GitHub 저장소 이름으로 변경
+
+
+
+2
+CMD 실행 후 cd 경로입력
+python -m PyInstaller artincalendar.spec
+재빌드
+
+
+3
+dist 폴더 zip 압축
+4
+GitHub Releases에 새 태그 + zip 첨부 → Publish
+
+https://github.com/jbj777513-wq/artincalendar
+
+
+
+
+
+
