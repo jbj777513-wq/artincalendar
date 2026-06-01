@@ -26,6 +26,7 @@ a = Analysis(
     datas=[
         ('fonts/*.ttf',        'fonts'),
         ('logo_white.png',     '.'),
+        ('logo.ico',           '.'),
         ('firebase_sync.py',   '.'),
         ('config.py',          '.'),
         ('updater.py',         '.'),
@@ -69,7 +70,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon='logo.ico',
 )
 
 coll = COLLECT(

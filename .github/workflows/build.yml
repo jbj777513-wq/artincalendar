@@ -48,3 +48,4 @@ jobs:
         with:
           files: artincalendar-${{ github.ref_name }}.zip
           name: ${{ github.ref_name }}
+          body: "버전 ${{ github.ref_name }} 업데이트"

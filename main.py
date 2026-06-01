@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QTextEdit, QColorDialog, QSystemTrayIcon, QMenu, QAction,
     QFrame, QScrollArea, QTimeEdit, QSlider, QDateEdit, QGroupBox,
     QCheckBox, QProgressBar, QMessageBox, QRadioButton, QButtonGroup,
-    QSizePolicy
+    QSizePolicy, QComboBox
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QDate, QTime, QThread, QByteArray
 from PyQt5.QtGui import QColor, QPainter, QBrush, QPen, QFont, QIcon, QPixmap, QFontMetrics
@@ -864,7 +864,7 @@ class DayButton(QPushButton):
                 p.setPen(QColor(255, 255, 255, 230))
                 txt_x = x0 + 4
                 max_w = W - txt_x - 4
-                star  = "★ " if important else ""
+                star  = (important + " ") if isinstance(important, str) and important else ("★ " if important else "")
                 txt   = fm.elidedText(star + title, Qt.ElideRight, max_w)
                 p.drawText(txt_x, y + bh_cur - 1, txt)
                 if important:
@@ -1016,17 +1016,26 @@ class EditEventDialog(QDialog):
         r2.addWidget(self.inp_end); r2.addStretch()
         layout.addLayout(r2)
 
-        # 중요일정 체크박스
-        self.chk_important = QCheckBox("⭐  중요 일정")
-        self.chk_important.setChecked(bool(self.ev.get("important", False)))
-        self.chk_important.setStyleSheet("""
-            QCheckBox { color: rgba(255,220,80,0.9); font-size: 11px; spacing: 6px; }
-            QCheckBox::indicator { width:16px; height:16px; border-radius:4px;
-                border:1px solid rgba(255,220,80,0.5); background:rgba(255,255,255,0.05); }
-            QCheckBox::indicator:checked { background:rgba(255,200,40,0.7);
-                border:1px solid rgba(255,220,80,0.9); }
-        """)
-        layout.addWidget(self.chk_important)
+        # 중요일정 콤보박스
+        _IMPORTANT_CATS = ["없음", "★[중요일정]", "★[제출]", "★[투찰]", "★[준공]", "★[착공]"]
+        imp_row = QHBoxLayout()
+        imp_row.addWidget(self._lbl("중요도:", size=10))
+        self.cmb_important = QComboBox()
+        self.cmb_important.addItems(_IMPORTANT_CATS)
+        cur_imp = self.ev.get("important", "")
+        if cur_imp is True:
+            self.cmb_important.setCurrentIndex(1)
+        elif isinstance(cur_imp, str) and cur_imp in _IMPORTANT_CATS:
+            self.cmb_important.setCurrentIndex(_IMPORTANT_CATS.index(cur_imp))
+        self.cmb_important.setStyleSheet(
+            "QComboBox{background:rgba(255,255,255,0.07);color:rgba(255,220,80,0.9);"
+            "border:1px solid rgba(255,220,80,0.4);border-radius:8px;padding:4px 8px;}"
+            "QComboBox::drop-down{border:none;width:18px;}"
+            "QComboBox QAbstractItemView{background:#1a1530;color:white;"
+            "border:1px solid rgba(108,99,255,0.4);selection-background-color:rgba(108,99,255,0.5);}")
+        imp_row.addWidget(self.cmb_important)
+        imp_row.addStretch()
+        layout.addLayout(imp_row)
 
         layout.addStretch()
         br = QHBoxLayout()
@@ -1067,7 +1076,7 @@ class EditEventDialog(QDialog):
             "time"     : self.inp_time.time().toString("HH:mm"),
             "color"    : self.chosen_color,
             "end_date" : end_d.strftime("%Y-%m-%d") if end_d > self.day else "",
-            "important": self.chk_important.isChecked(),
+            "important": self.cmb_important.currentText() if self.cmb_important.currentIndex() > 0 else "",
         })
         self.accept()
 
@@ -1172,16 +1181,21 @@ class EventDialog(QDialog):
         r2.addWidget(self.inp_end); r2.addStretch()
         layout.addLayout(r2)
 
-        # 중요일정 체크박스
-        self.chk_important = QCheckBox("⭐  중요 일정")
-        self.chk_important.setStyleSheet("""
-            QCheckBox { color: rgba(255,220,80,0.9); font-size: 11px; spacing: 6px; }
-            QCheckBox::indicator { width:16px; height:16px; border-radius:4px;
-                border:1px solid rgba(255,220,80,0.5); background:rgba(255,255,255,0.05); }
-            QCheckBox::indicator:checked { background:rgba(255,200,40,0.7);
-                border:1px solid rgba(255,220,80,0.9); }
-        """)
-        layout.addWidget(self.chk_important)
+        # 중요일정 콤보박스
+        _IMPORTANT_CATS = ["없음", "★[중요일정]", "★[제출]", "★[투찰]", "★[준공]", "★[착공]"]
+        imp_row = QHBoxLayout()
+        imp_row.addWidget(self._lbl("중요도:", size=10))
+        self.cmb_important = QComboBox()
+        self.cmb_important.addItems(_IMPORTANT_CATS)
+        self.cmb_important.setStyleSheet(
+            "QComboBox{background:rgba(255,255,255,0.07);color:rgba(255,220,80,0.9);"
+            "border:1px solid rgba(255,220,80,0.4);border-radius:8px;padding:4px 8px;}"
+            "QComboBox::drop-down{border:none;width:18px;}"
+            "QComboBox QAbstractItemView{background:#1a1530;color:white;"
+            "border:1px solid rgba(108,99,255,0.4);selection-background-color:rgba(108,99,255,0.5);}")
+        imp_row.addWidget(self.cmb_important)
+        imp_row.addStretch()
+        layout.addLayout(imp_row)
 
         br = QHBoxLayout()
         btn_add = QPushButton("➕ 일정 추가"); btn_add.clicked.connect(self._add_event)
@@ -1226,7 +1240,7 @@ class EventDialog(QDialog):
             end       = ev.get("end_date","")
             range_txt = f"  📅~{end}" if end and end != self.day.strftime("%Y-%m-%d") else ""
             time_txt  = f"[{ev['time']}] " if ev.get("time") else ""
-            star      = "★ " if important else ""
+            star      = (important + " ") if isinstance(important, str) and important else ("★ " if important else "")
             body      = f"{star}{time_txt}{ev.get('title','')}{range_txt}"
             if ev.get("memo"): body += f"\n📝 {ev['memo']}"
             font_size  = 14 if important else 11
@@ -1316,11 +1330,11 @@ class EventDialog(QDialog):
             "time"     : self.inp_time.time().toString("HH:mm"),
             "color"    : self.chosen_color,
             "end_date" : end_d.strftime("%Y-%m-%d") if end_d > self.day else "",
-            "important": self.chk_important.isChecked(),
+            "important": self.cmb_important.currentText() if self.cmb_important.currentIndex() > 0 else "",
         }
         self.result_events.append(ev)
         self.inp_title.clear(); self.inp_memo.clear()
-        self.chk_important.setChecked(False)
+        self.cmb_important.setCurrentIndex(0)
         self._render_events()
 
     def _lbl(self, text, color="white", size=11, bold=False):
