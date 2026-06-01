@@ -22,7 +22,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt pyinstaller
+          pip install PyQt5 pyrebase4 requests pyinstaller
 
       - name: Build EXE
         run: |
