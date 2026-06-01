@@ -7,6 +7,9 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -45,4 +48,3 @@ jobs:
         with:
           files: artincalendar-${{ github.ref_name }}.zip
           name: ${{ github.ref_name }}
-          generate_release_notes: true
