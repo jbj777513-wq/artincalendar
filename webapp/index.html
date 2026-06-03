@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+  <title>아트인캘린더</title>
+  <meta name="theme-color" content="#0f0c1e" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/favicon.ico" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="아트인캘린더" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header>
+      <button class="nav-btn" id="prev">‹</button>
+      <div id="title">— 월</div>
+      <div class="head-right">
+        <span id="status-dot" title="연결 상태"></span>
+        <button class="nav-btn" id="today" title="오늘">○</button>
+        <button class="nav-btn" id="settings" title="설정">⚙</button>
+      </div>
+      <button class="nav-btn" id="next">›</button>
+    </header>
+
+    <div class="weekdays">
+      <div class="sun">일</div><div>월</div><div>화</div><div>수</div>
+      <div>목</div><div>금</div><div class="sat">토</div>
+    </div>
+
+    <div id="grid"></div>
+  </div>
+
+  <!-- 시트들 -->
+  <div class="sheet-bg" id="sheet-bg">
+    <div class="sheet" id="sheet"></div>
+  </div>
+
+  <div class="update-toast" id="update-toast">새 버전으로 업데이트 중…</div>
+
+  <script src="version.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

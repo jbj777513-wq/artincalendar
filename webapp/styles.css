@@ -1,0 +1,144 @@
+:root {
+  --bg: #0f0c1e;
+  --bg2: #15102b;
+  --card: #1a1530;
+  --line: rgba(255, 255, 255, 0.08);
+  --accent: #a099ff;
+  --text: #ffffff;
+  --muted: rgba(255, 255, 255, 0.45);
+  --sun: #ff6666;
+  --sat: #6699ff;
+  --today: rgba(160, 153, 255, 0.22);
+  --gold: #ffe04a;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Pretendard", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+#app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+
+/* ── 헤더 ── */
+header {
+  padding: calc(var(--safe-top) + 10px) 14px 10px;
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--line);
+}
+.nav-btn {
+  background: none; border: none; color: var(--text);
+  font-size: 22px; width: 38px; height: 38px; border-radius: 10px;
+  cursor: pointer; display: grid; place-items: center;
+}
+.nav-btn:active { background: rgba(255,255,255,0.08); }
+#title { font-size: 18px; font-weight: 700; flex: 1; text-align: center; letter-spacing: -0.3px; }
+.head-right { display: flex; align-items: center; gap: 4px; }
+#status-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--muted); margin-right: 2px; transition: background .3s;
+}
+#status-dot.on { background: #55ff88; box-shadow: 0 0 6px #55ff88; }
+
+/* ── 요일 ── */
+.weekdays {
+  display: grid; grid-template-columns: repeat(7, 1fr);
+  padding: 8px 8px 4px; gap: 4px;
+}
+.weekdays div { text-align: center; font-size: 12px; color: var(--muted); font-weight: 600; }
+.weekdays .sun { color: var(--sun); }
+.weekdays .sat { color: var(--sat); }
+
+/* ── 달력 그리드 ── */
+#grid {
+  flex: 1; display: grid; grid-template-columns: repeat(7, 1fr);
+  gap: 4px; padding: 0 8px calc(var(--safe-bottom) + 8px); overflow: hidden;
+}
+.cell {
+  background: var(--card); border-radius: 10px; padding: 4px 4px 2px;
+  display: flex; flex-direction: column; overflow: hidden; min-height: 0;
+  cursor: pointer; border: 1px solid transparent; position: relative;
+}
+.cell.empty { background: transparent; cursor: default; }
+.cell.today { border-color: var(--accent); background: var(--today); }
+.cell:active:not(.empty) { background: #221b3d; }
+.daynum { font-size: 13px; font-weight: 600; line-height: 1.4; }
+.cell.sun .daynum { color: var(--sun); }
+.cell.sat .daynum { color: var(--sat); }
+.evs { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; overflow: hidden; }
+.chip {
+  font-size: 10px; line-height: 1.3; border-radius: 4px; padding: 1px 4px;
+  color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chip.imp { font-weight: 700; }
+.chip.star::before { content: "★ "; }
+.bar { height: 5px; border-radius: 3px; }
+.bar.start { margin-left: 0; }
+.more { font-size: 9px; color: var(--muted); padding-left: 2px; }
+
+/* ── 시트(모달) ── */
+.sheet-bg {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+  display: none; align-items: flex-end; z-index: 50;
+}
+.sheet-bg.open { display: flex; }
+.sheet {
+  background: var(--bg2); width: 100%; max-height: 88vh;
+  border-radius: 18px 18px 0 0; padding: 16px 16px calc(var(--safe-bottom) + 20px);
+  overflow-y: auto; animation: up .22s ease; box-shadow: 0 -8px 30px rgba(0,0,0,.5);
+}
+@keyframes up { from { transform: translateY(100%);} to { transform: translateY(0);} }
+.sheet h2 { margin: 4px 0 14px; font-size: 17px; color: var(--accent); }
+.sheet .sub { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+
+.ev-row {
+  display: flex; align-items: center; gap: 10px; padding: 11px 12px;
+  background: var(--card); border-radius: 12px; margin-bottom: 8px;
+}
+.ev-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.ev-info { flex: 1; min-width: 0; }
+.ev-title { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-title.imp { color: var(--gold); }
+.ev-meta { font-size: 11px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-row.readonly { opacity: .6; }
+.ev-edit { background: none; border: none; color: var(--muted); font-size: 18px; padding: 4px 6px; cursor: pointer; }
+
+label.fld { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 5px; }
+input[type=text], input[type=time], input[type=date], textarea, select {
+  width: 100%; background: var(--card); border: 1px solid var(--line); color: var(--text);
+  border-radius: 10px; padding: 11px 12px; font-size: 15px; font-family: inherit; outline: none;
+}
+input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+textarea { resize: none; min-height: 64px; }
+
+.colors { display: flex; gap: 9px; flex-wrap: wrap; margin-top: 6px; }
+.swatch { width: 30px; height: 30px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2); cursor: pointer; }
+.swatch.sel { border-color: #fff; transform: scale(1.12); }
+
+.btns { display: flex; gap: 10px; margin-top: 20px; }
+.btn {
+  flex: 1; border: none; border-radius: 12px; padding: 14px; font-size: 15px;
+  font-weight: 700; cursor: pointer; font-family: inherit;
+}
+.btn.primary { background: var(--accent); color: #1a1530; }
+.btn.ghost { background: var(--card); color: var(--text); }
+.btn.danger { background: rgba(255,80,80,0.18); color: #ff8080; }
+.btn-add {
+  width: 100%; border: 1px dashed var(--accent); background: rgba(160,153,255,0.08);
+  color: var(--accent); border-radius: 12px; padding: 13px; font-size: 14px;
+  font-weight: 600; cursor: pointer; margin-top: 4px; font-family: inherit;
+}
+
+.update-toast {
+  position: fixed; left: 50%; bottom: calc(var(--safe-bottom) + 16px); transform: translateX(-50%);
+  background: var(--accent); color: #1a1530; padding: 11px 16px; border-radius: 30px;
+  font-size: 13px; font-weight: 700; z-index: 100; display: none; box-shadow: 0 4px 20px rgba(0,0,0,.4);
+}

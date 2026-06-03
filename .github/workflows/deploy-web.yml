@@ -1,0 +1,46 @@
+name: Deploy Web App (PWA)
+
+# webapp 폴더가 바뀌어 main에 push되면 자동으로 GitHub Pages에 배포한다.
+# 수동 실행도 가능(Actions 탭 → Run workflow).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "webapp/**"
+      - ".github/workflows/deploy-web.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 배포할 때마다 버전 문자열을 자동으로 갱신 → 사용자 앱 캐시가 새로 교체되어 자동 업데이트됨
+      - name: Stamp version
+        run: |
+          VER="1.0.${{ github.run_number }}"
+          echo "배포 버전: $VER"
+          sed -i "s/window.AIC_VERSION = \".*\";/window.AIC_VERSION = \"$VER\";/" webapp/version.js
+          sed -i "s/const VERSION = \".*\";/const VERSION = \"$VER\";/" webapp/sw.js
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: webapp
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
