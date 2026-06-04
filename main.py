@@ -69,6 +69,18 @@ class LockOverlay(QWidget):
 
 
 # ════════════════════════════════════════════════════════════
+#  클릭 가능한 카드 (목록 행) — QPushButton과 달리 내부 레이아웃 크기를 반영
+# ════════════════════════════════════════════════════════════
+class ClickableCard(QFrame):
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(e)
+
+
+# ════════════════════════════════════════════════════════════
 #  메인 윈도우
 # ════════════════════════════════════════════════════════════
 class ArtInCalendar(QMainWindow):
@@ -483,12 +495,14 @@ class ArtInCalendar(QMainWindow):
 
                 # 스팬은 레인(lane)으로 위치가 고정됨 → 정렬 불필요
                 spans = span_rows[row][col]
+                # 이 날짜 칸에 실제로 지나가는 스팬 레인 번호들
+                span_lanes = {sp["lane"] for sp in spans}
 
                 btn = DayButton(
                     day=day, is_today=(d == today),
                     single_events=single_evs,
                     spans=spans,
-                    span_lane_count=row_lane_counts[row],
+                    span_lanes=span_lanes,
                     is_sun=(col == 0), is_sat=(col == 6),
                     w=cell_w, h=cell_h,
                     font_scale=self.config.get("font_scale", 1.0),
@@ -678,36 +692,39 @@ class ArtInCalendar(QMainWindow):
         if ev.get("memo"):
             meta.append(str(ev["memo"]).replace("\n", " "))
 
-        btn = QPushButton()
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.setStyleSheet(
-            "QPushButton{background:rgba(255,255,255,0.05); border:none; border-radius:10px; text-align:left;}"
-            "QPushButton:hover{background:rgba(160,153,255,0.18);}")
-        h = QHBoxLayout(btn)
+        card = ClickableCard()
+        card.setObjectName("listrow")
+        card.setCursor(Qt.PointingHandCursor)
+        card.setStyleSheet(
+            "#listrow{background:rgba(255,255,255,0.06); border:none; border-radius:10px;}"
+            "#listrow:hover{background:rgba(160,153,255,0.20);}")
+        h = QHBoxLayout(card)
         h.setContentsMargins(10, 8, 10, 8)
         h.setSpacing(10)
 
         dot = QLabel("●")
-        dot.setStyleSheet(f"color:{color}; font-size:{self._fs(12)}px;")
+        dot.setStyleSheet(f"color:{color}; font-size:{self._fs(12)}px; background:transparent;")
         dot.setAttribute(Qt.WA_TransparentForMouseEvents)
         h.addWidget(dot, 0, Qt.AlignTop)
 
         col = QVBoxLayout(); col.setSpacing(2)
         tlbl = QLabel((imp_lbl + " " if imp_lbl else "") + title)
+        tlbl.setWordWrap(True)
         tlbl.setStyleSheet(
             f"color:{'#ffe04a' if imp_lbl else tc}; font-size:{self._fs(13)}px;"
-            f" font-weight:{'bold' if imp_lbl else '600'};")
+            f" font-weight:{'bold' if imp_lbl else '600'}; background:transparent;")
         tlbl.setAttribute(Qt.WA_TransparentForMouseEvents)
         col.addWidget(tlbl)
         if meta:
             mlbl = QLabel("   ·   ".join(meta))
-            mlbl.setStyleSheet(f"color:rgba(255,255,255,0.45); font-size:{self._fs(10)}px;")
+            mlbl.setWordWrap(True)
+            mlbl.setStyleSheet(f"color:rgba(255,255,255,0.5); font-size:{self._fs(10)}px; background:transparent;")
             mlbl.setAttribute(Qt.WA_TransparentForMouseEvents)
             col.addWidget(mlbl)
         h.addLayout(col, 1)
 
-        btn.clicked.connect(lambda _, dd=d: self._open_day_from_list(dd))
-        return btn
+        card.clicked.connect(lambda dd=d: self._open_day_from_list(dd))
+        return card
 
     def _open_day_from_list(self, d):
         self._on_day_click(d)
@@ -925,12 +942,12 @@ class DayButton(QPushButton):
     def __init__(self, day, is_today,
                  single_events, spans,
                  is_sun, is_sat, w, h, font_scale,
-                 col, total_cols, text_color="#ffffff", span_lane_count=0):
+                 col, total_cols, text_color="#ffffff", span_lanes=None):
         super().__init__()
         self.day_num         = day
         self.single_evs      = single_events
         self.spans           = spans
-        self.span_lane_count = span_lane_count
+        self.span_lanes      = span_lanes or set()   # 이 날짜에 지나가는 스팬 레인 번호 집합
         self.font_scale      = font_scale
         self._is_today   = is_today
         self._col        = col
@@ -1078,46 +1095,45 @@ class DayButton(QPushButton):
                 p.setPen(QColor(255, 255, 255, 235))
                 p.drawText(W - fm.horizontalAdvance("▶") - 2, yy + BH - 2, "▶")
 
-        # 스팬 레인 아래부터 단일 이벤트 배치
-        y     = base_y + self.span_lane_count * (BH + BG)
-        shown = 0
-
-        # ── 단일 이벤트 바 ────────────────────────────────────
+        # ── 단일 이벤트 바 (스팬이 없는 빈 레인부터 채움 → 위쪽 빈칸 방지) ──
         p.setRenderHint(QPainter.Antialiasing, True)  # 단일 바는 양쪽 둥글게
+        shown = 0
+        lane  = 0
         for ev in self.single_evs:
             if shown >= self.MAX_EV: break
+            while lane in self.span_lanes:   # 이 날짜에 지나가는 스팬 레인은 건너뜀
+                lane += 1
+            yy = base_y + lane * (BH + BG)
+            if yy + BH > y_max: break
+
             color     = ev.get("color", "#a099ff")
             title     = ev.get("title", "")
             important = ev.get("important", False)
             qc        = QColor(color)
             bar       = QColor(qc.red(), qc.green(), qc.blue(), 175)
 
-            bh_cur = int(BH * 1.3) if important else BH
-
-            if y + bh_cur > y_max: break
-
-            r  = bh_cur // 2
+            r  = BH // 2
             x0 = PAD + 3
             x1 = W - PAD - 3
             bw = max(4, x1 - x0)
             path2 = _QPP()
-            path2.addRoundedRect(x0, y, bw, bh_cur, r, r)
+            path2.addRoundedRect(x0, yy, bw, BH, r, r)
             p.setBrush(QBrush(bar)); p.setPen(Qt.NoPen)
             p.drawPath(path2)
 
             p.setRenderHint(QPainter.TextAntialiasing, True)
             if important:
-                imp_f = QFont("Pretendard"); imp_f.setPointSize(max(7, int(ev_sz * 1.3))); imp_f.setBold(True)
+                imp_f = QFont("Pretendard"); imp_f.setPointSize(ev_sz); imp_f.setBold(True)
                 p.setFont(imp_f); fm = p.fontMetrics()
-            p.setPen(QColor(255, 255, 255, 230))
+            p.setPen(QColor(255, 255, 255, 235))
             max_w = bw - 8
             star  = important if isinstance(important, str) and important else ("★" if important else "")
             txt   = fm.elidedText(star + title, Qt.ElideRight, max_w)
-            p.drawText(x0 + 4, y + bh_cur - 1, txt)
+            p.drawText(x0 + 4, yy + BH - 2, txt)
             if important:
                 p.setFont(ef); fm = p.fontMetrics()
 
-            y     += bh_cur + BG
+            lane  += 1
             shown += 1
 
         # 초과 표시 (보이는 스팬 + 그려진 단일)
