@@ -34,6 +34,8 @@ function parseYmd(s) {
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+// 중요 라벨(예: "★[제출]") 문자열만 반환. boolean/빈값은 "".
+const impLabel = (ev) => (ev && typeof ev.important === "string" && ev.important) ? ev.important : "";
 
 // ── 설정 ──────────────────────────────────────────────
 function loadSettings() {
@@ -181,7 +183,7 @@ function weekSegments(colDate) {
         a, b,
         color: ev.color || "#a099ff",
         title: ev.title || "",
-        important: !!ev.important,
+        imp: impLabel(ev),        // 중요 라벨 문자열(예: "★[제출]") 또는 ""
         multi: eD > sD,
         contL: sD < colDate[a],   // 이전 주에서 이어짐
         contR: eD > colDate[b],   // 다음 주로 이어짐
@@ -189,7 +191,7 @@ function weekSegments(colDate) {
     }
   }
   raw.sort((x, y) =>
-    x.a - y.a || (y.b - y.a) - (x.b - x.a) || (x.important ? 0 : 1) - (y.important ? 0 : 1));
+    x.a - y.a || (y.b - y.a) - (x.b - x.a) || (x.imp ? 0 : 1) - (y.imp ? 0 : 1));
   const lanes = [];
   for (const s of raw) {
     let li = 0;
@@ -249,8 +251,8 @@ function renderMonth(grid) {
       const cls = ["seg"];
       if (s.contL) cls.push("contL");
       if (s.contR) cls.push("contR");
-      if (s.important) cls.push("imp");
-      const label = (s.contL ? "◀ " : "") + esc(s.title) + (s.contR ? " ▶" : "");
+      if (s.imp) cls.push("imp");
+      const label = (s.contL ? "◀ " : "") + (s.imp ? esc(s.imp) + " " : "") + esc(s.title) + (s.contR ? " ▶" : "");
       bars += `<div class="${cls.join(" ")}" style="grid-column:${s.a + 1}/${s.b + 2};grid-row:${s.lane + 1};background:${esc(s.color)}">${label}</div>`;
     }
     for (const c in overflow) {
@@ -292,11 +294,11 @@ function renderList(grid) {
         if (ed) meta.push(`${d.getMonth() + 1}/${d.getDate()} ~ ${ed.getMonth() + 1}/${ed.getDate()}`);
       }
       if (ev.memo) meta.push(ev.memo.replace(/\n/g, " "));
-      const star = ev.important ? "★ " : "";
+      const imp = impLabel(ev), star = imp ? imp + " " : "";
       html += `<div class="ev-row" data-key="${key}">
         <span class="ev-dot" style="background:${esc(ev.color || "#a099ff")}"></span>
         <div class="ev-info">
-          <div class="ev-title${ev.important ? " imp" : ""}">${star}${esc(ev.title || "(제목 없음)")}</div>
+          <div class="ev-title${imp ? " imp" : ""}">${esc(star)}${esc(ev.title || "(제목 없음)")}</div>
           ${meta.length ? `<div class="ev-meta">${esc(meta.join("  ·  "))}</div>` : ""}
         </div></div>`;
     }
@@ -355,13 +357,14 @@ function evRow(ev, idx, readonly) {
   if (ev.time && ev.time !== "00:00") meta.push(ev.time);
   if (ev.end_date) meta.push("~" + ev.end_date);
   if (ev.memo) meta.push(ev.memo);
-  const impCls = ev.important ? " imp" : "";
-  const star = ev.important ? "★ " : "";
+  const imp = impLabel(ev);
+  const impCls = imp ? " imp" : "";
+  const star = imp ? imp + " " : "";
   const editBtn = readonly ? "" : `<button class="ev-edit" data-edit="${idx}">✎</button>`;
   return `<div class="ev-row${readonly ? " readonly" : ""}">
     <span class="ev-dot" style="background:${esc(ev.color || "#a099ff")}"></span>
     <div class="ev-info">
-      <div class="ev-title${impCls}">${star}${esc(ev.title || "(제목 없음)")}</div>
+      <div class="ev-title${impCls}">${esc(star)}${esc(ev.title || "(제목 없음)")}</div>
       ${meta.length ? `<div class="ev-meta">${esc(meta.join("  ·  "))}</div>` : ""}
     </div>${editBtn}
   </div>`;
