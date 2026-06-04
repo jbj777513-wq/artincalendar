@@ -83,6 +83,7 @@ class ArtInCalendar(QMainWindow):
         self.current_month = date.today().month
         self._drag_pos     = None
         self.locked        = False
+        self.view          = "month"   # "month" | "list"
 
         self._setup_window()
         self._setup_tray()
@@ -227,6 +228,17 @@ class ArtInCalendar(QMainWindow):
         # 아랫정렬용 마진
         self.btn_lock.setContentsMargins(0, 0, 0, 6)
 
+        # 목록/달력 전환 버튼
+        self.btn_view = QPushButton("☰")
+        self.btn_view.setFixedSize(30, 30)
+        self.btn_view.setToolTip("목록 보기")
+        self.btn_view.setStyleSheet(f"""
+            QPushButton {{ background:rgba(255,255,255,0.10); color:rgba(255,255,255,0.7);
+                border-radius:15px; border:1px solid rgba(255,255,255,0.2); font-size:15px; }}
+            QPushButton:hover {{ background:rgba(255,255,255,0.25); color:white; }}
+        """)
+        self.btn_view.clicked.connect(self._toggle_view)
+
         # 설정 버튼
         self.btn_settings = QPushButton("⚙")
         self.btn_settings.setFixedSize(30, 30)
@@ -263,6 +275,7 @@ class ArtInCalendar(QMainWindow):
         hdr_layout.addWidget(title_widget, 0, Qt.AlignBottom)
         hdr_layout.addStretch()
         hdr_layout.addWidget(self.btn_lock,     0, Qt.AlignBottom)
+        hdr_layout.addWidget(self.btn_view,     0, Qt.AlignBottom)
         hdr_layout.addWidget(self.btn_settings, 0, Qt.AlignBottom)
         hdr_layout.addWidget(self.btn_minimize, 0, Qt.AlignBottom)
         hdr_layout.addWidget(self.btn_close,    0, Qt.AlignBottom)
@@ -297,6 +310,13 @@ class ArtInCalendar(QMainWindow):
         sep.setStyleSheet(f"background:{acc}33; max-height:1px;")
         body_layout.addWidget(sep)
 
+        # ── 달력 영역(요일헤더 + 그리드)을 한 위젯으로 묶어 목록뷰와 전환 ──
+        self.cal_widget = QWidget()
+        self.cal_widget.setStyleSheet("background:transparent;")
+        cal_v = QVBoxLayout(self.cal_widget)
+        cal_v.setContentsMargins(0, 0, 0, 0)
+        cal_v.setSpacing(6)
+
         # 요일 헤더
         drow = QHBoxLayout(); drow.setSpacing(3)
         for d in ["일","월","화","수","목","금","토"]:
@@ -306,14 +326,24 @@ class ArtInCalendar(QMainWindow):
             l = QLabel(d); l.setAlignment(Qt.AlignCenter)
             l.setStyleSheet(f"color:{dc}; font-size:{self._fs(11)}px; font-weight:bold;")
             drow.addWidget(l)
-        body_layout.addLayout(drow)
+        cal_v.addLayout(drow)
 
         # 날짜 그리드
         self.grid = QGridLayout()
         self.grid.setSpacing(0)
         self.grid.setHorizontalSpacing(0)
         self.grid.setVerticalSpacing(0)
-        body_layout.addLayout(self.grid)
+        cal_v.addLayout(self.grid)
+        body_layout.addWidget(self.cal_widget)
+
+        # ── 목록(아젠다) 영역 ──
+        self.list_area = QScrollArea()
+        self.list_area.setWidgetResizable(True)
+        self.list_area.setFrameShape(QFrame.NoFrame)
+        self.list_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.list_area.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        self.list_area.setVisible(False)
+        body_layout.addWidget(self.list_area, 1)
 
         # 하단 상태바
         bot = QHBoxLayout()
@@ -341,6 +371,10 @@ class ArtInCalendar(QMainWindow):
         self.setFixedSize(w, h)
 
         self._refresh_calendar()
+        # 설정 변경 등으로 UI 재빌드 시 목록뷰 상태 복원
+        if self.view == "list":
+            self.view = "month"
+            self._toggle_view()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -425,7 +459,7 @@ class ArtInCalendar(QMainWindow):
         # 셀 높이: 사용 가능 높이를 행 수로 나눔, 최솟값 보장
         cell_h = max(80, avail_h // rows_in_cal)
 
-        span_rows = self._compute_spans(cal)
+        span_rows, row_lane_counts = self._compute_spans(cal)
 
         for row, week in enumerate(cal):
             for col, day in enumerate(week):
@@ -447,15 +481,14 @@ class ArtInCalendar(QMainWindow):
                 single_evs = sorted(single_evs_raw,
                                     key=lambda e: 0 if e.get("important") else 1)
 
-                spans_raw = span_rows[row][col]
-                # 스팬도 중요 일정 위로
-                spans = sorted(spans_raw,
-                               key=lambda s: 0 if (s[6] if len(s) > 6 else False) else 1)
+                # 스팬은 레인(lane)으로 위치가 고정됨 → 정렬 불필요
+                spans = span_rows[row][col]
 
                 btn = DayButton(
                     day=day, is_today=(d == today),
                     single_events=single_evs,
                     spans=spans,
+                    span_lane_count=row_lane_counts[row],
                     is_sun=(col == 0), is_sat=(col == 6),
                     w=cell_w, h=cell_h,
                     font_scale=self.config.get("font_scale", 1.0),
@@ -473,9 +506,20 @@ class ArtInCalendar(QMainWindow):
             self.overlay.show()
 
     def _compute_spans(self, cal):
-        span_rows = [[[] for _ in range(7)] for _ in range(len(cal))]
+        """
+        다중일정을 '주 단위 레인'으로 배정해 같은 일정이 모든 날짜에서
+        같은 높이(lane)에 그려지도록 한다. → 칸 사이 끊김 없는 연속 띠.
+        반환: (span_rows, row_lane_counts)
+          span_rows[row][col] = [dict(...), ...]  (그 날짜 칸에 그릴 띠 조각)
+          row_lane_counts[row] = 그 주에서 쓰인 레인 수 (단일 일정 y 오프셋용)
+        """
+        nrows = len(cal)
+        span_rows = [[[] for _ in range(7)] for _ in range(nrows)]
+        row_lane_counts = [0] * nrows
         year, month = self.current_year, self.current_month
 
+        # 1) 멀티데이 이벤트 수집
+        multi = []
         for start_key, ev_list in self.events.items():
             try:
                 start_d = date.fromisoformat(start_key)
@@ -491,26 +535,184 @@ class ArtInCalendar(QMainWindow):
                     continue
                 if end_d <= start_d:
                     continue
+                multi.append((start_d, end_d,
+                              ev.get("color", "#a099ff"),
+                              ev.get("title", ""),
+                              ev.get("important", False)))
 
-                color     = ev.get("color", "#a099ff")
-                title     = ev.get("title", "")
-                important = ev.get("important", False)
+        # 2) 각 주(행)별로 레인 배정 + 셀 타일 생성
+        for r, week in enumerate(cal):
+            row_dates = [date(year, month, d) if d != 0 else None for d in week]
+            segs = []
+            for (sd, ed, color, title, important) in multi:
+                a = b = -1
+                for c, dd in enumerate(row_dates):
+                    if dd and sd <= dd <= ed:
+                        if a < 0:
+                            a = c
+                        b = c
+                if a < 0:
+                    continue
+                segs.append({
+                    "a": a, "b": b, "color": color, "title": title,
+                    "important": important,
+                    "is_start": (row_dates[a] == sd),
+                    "is_end":   (row_dates[b] == ed),
+                })
 
-                for row, week in enumerate(cal):
-                    for col, day in enumerate(week):
-                        if day == 0:
-                            continue
-                        d = date(year, month, day)
-                        if start_d <= d <= end_d:
-                            is_start = (d == start_d)
-                            is_end   = (d == end_d)
-                            # 행 경계는 col 번호로만 판정 (가장 단순하고 정확함)
-                            is_row_start = (col == 0)
-                            is_row_end   = (col == 6)
-                            span_rows[row][col].append(
-                                (color, is_start, is_end, title, is_row_start, is_row_end, important)
-                            )
-        return span_rows
+            # 레인 배정 (시작 빠른 순 → 긴 것 → 중요 먼저)
+            segs.sort(key=lambda s: (s["a"], -(s["b"] - s["a"]), 0 if s["important"] else 1))
+            lanes = []  # lanes[i] = [(a,b), ...]
+            for s in segs:
+                li = 0
+                while li < len(lanes) and not all(s["b"] < la or s["a"] > lb for (la, lb) in lanes[li]):
+                    li += 1
+                if li == len(lanes):
+                    lanes.append([])
+                lanes[li].append((s["a"], s["b"]))
+                s["lane"] = li
+            row_lane_counts[r] = len(lanes)
+
+            # 셀 타일로 전개
+            for s in segs:
+                for c in range(s["a"], s["b"] + 1):
+                    span_rows[r][c].append({
+                        "color": s["color"], "title": s["title"],
+                        "important": s["important"], "lane": s["lane"],
+                        "round_left":  s["is_start"] and c == s["a"],
+                        "round_right": s["is_end"]   and c == s["b"],
+                        "draw_title":  (c == s["a"]),                    # 주 첫 칸마다 제목
+                        "arrow_left":  (c == s["a"]) and not s["is_start"],
+                        "arrow_right": (c == s["b"]) and not s["is_end"],
+                    })
+
+        return span_rows, row_lane_counts
+
+    # ── 목록(아젠다) 뷰 ───────────────────────────────────────
+    def _toggle_view(self):
+        self.view = "list" if self.view == "month" else "month"
+        is_list = (self.view == "list")
+        self.cal_widget.setVisible(not is_list)
+        self.list_area.setVisible(is_list)
+        self.btn_prev.setVisible(not is_list)
+        self.btn_next.setVisible(not is_list)
+        self.btn_view.setText("▦" if is_list else "☰")
+        self.btn_view.setToolTip("달력 보기" if is_list else "목록 보기")
+        if is_list:
+            self.month_label.setText("다가오는 일정")
+            self._refresh_list()
+        else:
+            self.month_label.setText(f"{self.current_year}년 {self.current_month}월")
+            self._refresh_calendar()
+
+    def _refresh_list(self):
+        today = date.today()
+        container = QWidget()
+        container.setStyleSheet("background:transparent;")
+        v = QVBoxLayout(container)
+        v.setContentsMargins(2, 2, 6, 10)
+        v.setSpacing(4)
+
+        by_date = {}
+        for key, lst in self.events.items():
+            try:
+                sd = date.fromisoformat(key)
+            except Exception:
+                continue
+            if not isinstance(lst, list):
+                continue
+            for ev in lst:
+                end_str = ev.get("end_date") or key
+                try:
+                    ed = date.fromisoformat(end_str)
+                except Exception:
+                    ed = sd
+                if ed < today:
+                    continue
+                by_date.setdefault(key, []).append(ev)
+
+        keys = sorted(by_date.keys())
+        if not keys:
+            lbl = QLabel("다가오는 일정이 없습니다.")
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setStyleSheet(
+                f"color:rgba(255,255,255,0.4); font-size:{self._fs(13)}px; padding:40px 0;")
+            v.addWidget(lbl)
+        else:
+            wdays = ["월", "화", "수", "목", "금", "토", "일"]
+            for key in keys:
+                d = date.fromisoformat(key)
+                head_txt = f"{d.month}월 {d.day}일 ({wdays[d.weekday()]})"
+                if d == today:
+                    head_txt += "   · 오늘"
+                head = QLabel(head_txt)
+                head.setStyleSheet(
+                    f"color:#a099ff; font-size:{self._fs(12)}px; font-weight:bold; padding:8px 2px 2px;")
+                v.addWidget(head)
+                evs = sorted(by_date[key],
+                             key=lambda e: (0 if e.get("important") else 1, str(e.get("time", ""))))
+                for ev in evs:
+                    v.addWidget(self._make_list_row(d, ev))
+        v.addStretch()
+        self.list_area.setWidget(container)
+
+    def _make_list_row(self, d, ev):
+        tc        = getattr(self, "_tc", "#ffffff")
+        color     = ev.get("color", "#a099ff")
+        important = ev.get("important", False)
+        title     = ev.get("title", "") or "(제목 없음)"
+        imp_lbl   = important if isinstance(important, str) and important else ""
+
+        meta = []
+        t = ev.get("time", "")
+        if t and t != "00:00":
+            meta.append(t)
+        end_str = ev.get("end_date", "")
+        if end_str:
+            try:
+                ed = date.fromisoformat(end_str)
+                if ed > d:
+                    meta.append(f"{d.month}/{d.day} ~ {ed.month}/{ed.day}")
+            except Exception:
+                pass
+        if ev.get("memo"):
+            meta.append(str(ev["memo"]).replace("\n", " "))
+
+        btn = QPushButton()
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setStyleSheet(
+            "QPushButton{background:rgba(255,255,255,0.05); border:none; border-radius:10px; text-align:left;}"
+            "QPushButton:hover{background:rgba(160,153,255,0.18);}")
+        h = QHBoxLayout(btn)
+        h.setContentsMargins(10, 8, 10, 8)
+        h.setSpacing(10)
+
+        dot = QLabel("●")
+        dot.setStyleSheet(f"color:{color}; font-size:{self._fs(12)}px;")
+        dot.setAttribute(Qt.WA_TransparentForMouseEvents)
+        h.addWidget(dot, 0, Qt.AlignTop)
+
+        col = QVBoxLayout(); col.setSpacing(2)
+        tlbl = QLabel((imp_lbl + " " if imp_lbl else "") + title)
+        tlbl.setStyleSheet(
+            f"color:{'#ffe04a' if imp_lbl else tc}; font-size:{self._fs(13)}px;"
+            f" font-weight:{'bold' if imp_lbl else '600'};")
+        tlbl.setAttribute(Qt.WA_TransparentForMouseEvents)
+        col.addWidget(tlbl)
+        if meta:
+            mlbl = QLabel("   ·   ".join(meta))
+            mlbl.setStyleSheet(f"color:rgba(255,255,255,0.45); font-size:{self._fs(10)}px;")
+            mlbl.setAttribute(Qt.WA_TransparentForMouseEvents)
+            col.addWidget(mlbl)
+        h.addLayout(col, 1)
+
+        btn.clicked.connect(lambda _, dd=d: self._open_day_from_list(dd))
+        return btn
+
+    def _open_day_from_list(self, d):
+        self._on_day_click(d)
+        if self.view == "list":
+            self._refresh_list()
 
     # ── 날짜 클릭 ────────────────────────────────────────────
     def _on_day_click(self, d: date):
@@ -723,12 +925,13 @@ class DayButton(QPushButton):
     def __init__(self, day, is_today,
                  single_events, spans,
                  is_sun, is_sat, w, h, font_scale,
-                 col, total_cols, text_color="#ffffff"):
+                 col, total_cols, text_color="#ffffff", span_lane_count=0):
         super().__init__()
-        self.day_num     = day
-        self.single_evs  = single_events
-        self.spans       = spans
-        self.font_scale  = font_scale
+        self.day_num         = day
+        self.single_evs      = single_events
+        self.spans           = spans
+        self.span_lane_count = span_lane_count
+        self.font_scale      = font_scale
         self._is_today   = is_today
         self._col        = col
         self._total_cols = total_cols
@@ -804,78 +1007,80 @@ class DayButton(QPushButton):
         # 바 그리기 전 안티앨리어싱 OFF (경계 번짐이 겹침처럼 보이는 문제 방지)
         p.setRenderHint(QPainter.Antialiasing, False)
 
-        # ── 다일 스팬 바 ─────────────────────────────────────
+        # ── 다일 스팬 바 (레인 고정 → 칸 사이 끊김 없는 연속 띠) ──
         from PyQt5.QtGui import QPainterPath as _QPP
+        base_y = y
         for sp in self.spans:
-            if shown >= self.MAX_EV: break
-            color, is_start, is_end, title, is_row_start, is_row_end = sp[:6]
-            important = sp[6] if len(sp) > 6 else False
+            lane = sp.get("lane", 0)
+            yy   = base_y + lane * (BH + BG)
+            if yy + BH > y_max:
+                continue
 
-            qc  = QColor(color)
-            bar = QColor(qc.red(), qc.green(), qc.blue(), 175)
-            bh_cur = int(BH * 1.3) if important else BH
+            qc  = QColor(sp["color"])
+            bar = QColor(qc.red(), qc.green(), qc.blue(), 185)
+            round_left  = sp["round_left"]
+            round_right = sp["round_right"]
 
-            if y + bh_cur > y_max: break
-
-            round_left  = is_start or is_row_start
-            round_right = is_end   or is_row_end
-
-            # x 경계: 셀 안쪽에 확실히 들어오도록 여백 설정
-            # 중간 셀(양쪽 직각)은 2px 여백으로 인접 셀과 확실히 분리
-            x0 = PAD + 2 if round_left  else 2
-            x1 = W - PAD - 2 if round_right else W - 2
-            bw = max(4, x1 - x0)
-            r  = min(bh_cur // 2, bw // 2) if (round_left or round_right) else 0
+            # 둥글지 않은 끝은 셀 경계(0 / W)까지 그려 이웃 칸과 맞닿게 → 연속 띠
+            x0 = 3 if round_left  else 0
+            x1 = W - 3 if round_right else W
+            bw = max(2, x1 - x0)
+            r  = min(BH // 2, bw // 2) if (round_left or round_right) else 0
 
             path = _QPP()
             if round_left and round_right:
                 p.setRenderHint(QPainter.Antialiasing, True)
-                path.addRoundedRect(x0, y, bw, bh_cur, r, r)
+                path.addRoundedRect(x0, yy, bw, BH, r, r)
             elif round_left:
                 p.setRenderHint(QPainter.Antialiasing, True)
-                path.moveTo(x0 + r, y)
-                path.lineTo(x1, y)
-                path.lineTo(x1, y + bh_cur)
-                path.lineTo(x0 + r, y + bh_cur)
-                path.quadTo(x0, y + bh_cur, x0, y + bh_cur - r)
-                path.lineTo(x0, y + r)
-                path.quadTo(x0, y, x0 + r, y)
+                path.moveTo(x1, yy)
+                path.lineTo(x0 + r, yy)
+                path.quadTo(x0, yy, x0, yy + r)
+                path.lineTo(x0, yy + BH - r)
+                path.quadTo(x0, yy + BH, x0 + r, yy + BH)
+                path.lineTo(x1, yy + BH)
                 path.closeSubpath()
             elif round_right:
                 p.setRenderHint(QPainter.Antialiasing, True)
-                path.moveTo(x0, y)
-                path.lineTo(x1 - r, y)
-                path.quadTo(x1, y, x1, y + r)
-                path.lineTo(x1, y + bh_cur - r)
-                path.quadTo(x1, y + bh_cur, x1 - r, y + bh_cur)
-                path.lineTo(x0, y + bh_cur)
+                path.moveTo(x0, yy)
+                path.lineTo(x1 - r, yy)
+                path.quadTo(x1, yy, x1, yy + r)
+                path.lineTo(x1, yy + BH - r)
+                path.quadTo(x1, yy + BH, x1 - r, yy + BH)
+                path.lineTo(x0, yy + BH)
                 path.closeSubpath()
             else:
-                # 중간 셀: 안티앨리어싱 OFF 유지, 단순 사각형
                 p.setRenderHint(QPainter.Antialiasing, False)
-                path.addRect(x0, y, bw, bh_cur)
+                path.addRect(x0, yy, bw, BH)
 
             p.setBrush(QBrush(bar)); p.setPen(Qt.NoPen)
             p.drawPath(path)
-            # 다음 바를 위해 안티앨리어싱 다시 OFF
             p.setRenderHint(QPainter.Antialiasing, False)
 
-            if is_start:
+            important = sp["important"]
+            # 제목: 주(週) 첫 칸마다 표시 + 앞주에서 이어지면 ◀
+            if sp["draw_title"]:
                 p.setRenderHint(QPainter.TextAntialiasing, True)
                 if important:
-                    imp_f = QFont("Pretendard"); imp_f.setPointSize(max(7, int(ev_sz * 1.3))); imp_f.setBold(True)
+                    imp_f = QFont("Pretendard"); imp_f.setPointSize(ev_sz); imp_f.setBold(True)
                     p.setFont(imp_f); fm = p.fontMetrics()
-                p.setPen(QColor(255, 255, 255, 230))
-                txt_x = x0 + 4
-                max_w = W - txt_x - 4
+                p.setPen(QColor(255, 255, 255, 235))
                 star  = important if isinstance(important, str) and important else ("★" if important else "")
-                txt   = fm.elidedText(star + title, Qt.ElideRight, max_w)
-                p.drawText(txt_x, y + bh_cur - 1, txt)
+                arrow = "◀ " if sp["arrow_left"] else ""
+                txt_x = x0 + 4
+                txt   = fm.elidedText(arrow + star + sp["title"], Qt.ElideRight, W - txt_x - 4)
+                p.drawText(txt_x, yy + BH - 2, txt)
                 if important:
                     p.setFont(ef); fm = p.fontMetrics()
+            # 다음 주로 이어지면 오른쪽 끝에 ▶
+            if sp["arrow_right"]:
+                p.setRenderHint(QPainter.TextAntialiasing, True)
+                p.setPen(QColor(255, 255, 255, 235))
+                p.drawText(W - fm.horizontalAdvance("▶") - 2, yy + BH - 2, "▶")
 
-            y     += bh_cur + BG
-            shown += 1
+        # 스팬 레인 아래부터 단일 이벤트 배치
+        y     = base_y + self.span_lane_count * (BH + BG)
+        shown = 0
 
         # ── 단일 이벤트 바 ────────────────────────────────────
         p.setRenderHint(QPainter.Antialiasing, True)  # 단일 바는 양쪽 둥글게
@@ -915,12 +1120,15 @@ class DayButton(QPushButton):
             y     += bh_cur + BG
             shown += 1
 
-        # 초과 표시
+        # 초과 표시 (보이는 스팬 + 그려진 단일)
+        visible_spans = sum(1 for sp in self.spans
+                            if base_y + sp.get("lane", 0) * (BH + BG) + BH <= y_max)
         total = len(self.spans) + len(self.single_evs)
-        if total > shown:
+        drawn = visible_spans + shown
+        if total > drawn:
             p.setPen(QColor(255, 255, 255, 100))
             sf = QFont("Pretendard"); sf.setPointSize(max(6, int(7 * fs))); p.setFont(sf)
-            p.drawText(5, self.height() - 3, f"+{total - shown}개 더")
+            p.drawText(5, self.height() - 3, f"+{total - drawn}개 더")
 
         p.end()
 
