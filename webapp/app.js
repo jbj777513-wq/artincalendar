@@ -50,6 +50,7 @@ const STATE = {
   events: {},
   year: now.getFullYear(),
   month: now.getMonth() + 1, // 1~12
+  view: "month", // "month" | "list"
   settings: loadSettings(),
 };
 
@@ -136,95 +137,170 @@ async function saveAll() {
   await sync.save(STATE.events);
 }
 
-// ── 달력 데이터 가공 ───────────────────────────────────
-function buildView() {
-  const singles = {}; // key -> [ev]
-  const spans = {};    // key -> [{color,title,isStart,important}]
-  for (const [startKey, list] of Object.entries(STATE.events)) {
-    if (!Array.isArray(list)) continue;
-    const startD = parseYmd(startKey);
-    if (!startD) continue;
-    for (const ev of list) {
-      const end = ev && ev.end_date;
-      const endD = end ? parseYmd(end) : null;
-      if (!endD || endD <= startD) {
-        (singles[startKey] ||= []).push(ev);
-      } else {
-        for (let d = new Date(startD); d <= endD; d.setDate(d.getDate() + 1)) {
-          (spans[ymd(d)] ||= []).push({
-            color: ev.color || "#a099ff",
-            title: ev.title || "",
-            isStart: ymd(d) === startKey,
-            important: !!ev.important,
-          });
-        }
-      }
-    }
+// ── 렌더링 ─────────────────────────────────────────────
+let WEEK_KEYS = []; // [weekIdx][col] = "YYYY-MM-DD" | null  (월간뷰 클릭 매핑용)
+
+function render() {
+  const grid = $("grid");
+  const prev = $("prev"), next = $("next"), today = $("today");
+  const wd = document.querySelector(".weekdays");
+  if (STATE.view === "list") {
+    $("title").textContent = "다가오는 일정";
+    $("viewtoggle").textContent = "🗓";
+    prev.style.visibility = next.style.visibility = today.style.visibility = "hidden";
+    wd.style.display = "none";
+    grid.classList.add("list");
+    renderList(grid);
+  } else {
+    $("title").textContent = `${STATE.year}년 ${STATE.month}월`;
+    $("viewtoggle").textContent = "☰";
+    prev.style.visibility = next.style.visibility = today.style.visibility = "visible";
+    wd.style.display = "";
+    grid.classList.remove("list");
+    renderMonth(grid);
   }
-  const impFirst = (a, b) => (a.important ? 0 : 1) - (b.important ? 0 : 1);
-  for (const k in singles) singles[k].sort(impFirst);
-  for (const k in spans) spans[k].sort(impFirst);
-  return { singles, spans };
 }
 
-// ── 렌더링 ─────────────────────────────────────────────
-function render() {
-  $("title").textContent = `${STATE.year}년 ${STATE.month}월`;
-  const grid = $("grid");
-  const { singles, spans } = buildView();
+// 한 주(7칸)의 일정을 겹치지 않게 레인(행)으로 배정
+function weekSegments(colDate) {
+  const raw = [];
+  for (const [startKey, list] of Object.entries(STATE.events)) {
+    if (!Array.isArray(list)) continue;
+    const sD = parseYmd(startKey);
+    if (!sD) continue;
+    for (const ev of list) {
+      const eRaw = ev.end_date ? parseYmd(ev.end_date) : null;
+      const eD = eRaw && eRaw > sD ? eRaw : sD;
+      let a = -1, b = -1;
+      for (let c = 0; c < 7; c++) {
+        const d = colDate[c];
+        if (d && d >= sD && d <= eD) { if (a < 0) a = c; b = c; }
+      }
+      if (a < 0) continue; // 이 주에 안 걸림
+      raw.push({
+        a, b,
+        color: ev.color || "#a099ff",
+        title: ev.title || "",
+        important: !!ev.important,
+        multi: eD > sD,
+        contL: sD < colDate[a],   // 이전 주에서 이어짐
+        contR: eD > colDate[b],   // 다음 주로 이어짐
+      });
+    }
+  }
+  raw.sort((x, y) =>
+    x.a - y.a || (y.b - y.a) - (x.b - x.a) || (x.important ? 0 : 1) - (y.important ? 0 : 1));
+  const lanes = [];
+  for (const s of raw) {
+    let li = 0;
+    for (; li < lanes.length; li++) {
+      if (lanes[li].every(([la, lb]) => s.b < la || s.a > lb)) break;
+    }
+    (lanes[li] ||= []).push([s.a, s.b]);
+    s.lane = li;
+  }
+  return { raw, laneCount: lanes.length };
+}
 
+function renderMonth(grid) {
   const first = new Date(STATE.year, STATE.month - 1, 1);
   const startDow = first.getDay();
   const daysInMonth = new Date(STATE.year, STATE.month, 0).getDate();
 
   const cells = [];
-  for (let i = 0; i < startDow; i++) cells.push(0);
+  for (let i = 0; i < startDow; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
-  while (cells.length % 7 !== 0) cells.push(0);
+  while (cells.length % 7 !== 0) cells.push(null);
   const weeks = cells.length / 7;
-  grid.style.gridTemplateRows = `repeat(${weeks}, 1fr)`;
+  const MAXLANES = weeks >= 6 ? 3 : weeks === 5 ? 4 : 5;
 
   const todayKey = ymd(new Date());
-  const MAX = weeks > 5 ? 2 : 3; // 한 칸에 보여줄 최대 항목 수
-
+  WEEK_KEYS = [];
   let html = "";
-  cells.forEach((day, idx) => {
-    if (day === 0) { html += `<div class="cell empty"></div>`; return; }
-    const col = idx % 7;
-    const d = new Date(STATE.year, STATE.month - 1, day);
-    const key = ymd(d);
-    const cls = ["cell"];
-    if (col === 0) cls.push("sun");
-    if (col === 6) cls.push("sat");
-    if (key === todayKey) cls.push("today");
 
-    const sp = spans[key] || [];
-    const sg = singles[key] || [];
-    let items = "";
-    let shown = 0;
-    for (const s of sp) {
-      if (shown >= MAX) break;
-      if (s.isStart) {
-        items += `<div class="chip${s.important ? " imp star" : ""}" style="background:${esc(s.color)}">${esc(s.title)}</div>`;
-      } else {
-        items += `<div class="bar" style="background:${esc(s.color)}"></div>`;
+  for (let w = 0; w < weeks; w++) {
+    const row = cells.slice(w * 7, w * 7 + 7);
+    const colDate = row.map((day) => (day ? new Date(STATE.year, STATE.month - 1, day) : null));
+    const colKey = colDate.map((d) => (d ? ymd(d) : null));
+    WEEK_KEYS.push(colKey);
+
+    let days = "";
+    row.forEach((day, c) => {
+      if (!day) { days += `<div class="dnum pad"></div>`; return; }
+      const cls = ["dnum"];
+      if (c === 0) cls.push("sun");
+      if (c === 6) cls.push("sat");
+      const inner = colKey[c] === todayKey ? `<span class="tcircle">${day}</span>` : day;
+      days += `<div class="${cls.join(" ")}">${inner}</div>`;
+    });
+
+    const { raw, laneCount } = weekSegments(colDate);
+    let showUpTo = laneCount;
+    const overflow = {};
+    if (laneCount > MAXLANES) {
+      showUpTo = MAXLANES - 1; // 마지막 줄은 +N 표시용으로 비움
+      for (const s of raw) {
+        if (s.lane >= showUpTo) for (let c = s.a; c <= s.b; c++) if (colKey[c]) overflow[c] = (overflow[c] || 0) + 1;
       }
-      shown++;
     }
-    for (const ev of sg) {
-      if (shown >= MAX) break;
-      const t = ev.time && ev.time !== "00:00" ? `[${esc(ev.time)}] ` : "";
-      items += `<div class="chip${ev.important ? " imp star" : ""}" style="background:${esc(ev.color || "#a099ff")}">${t}${esc(ev.title || "")}</div>`;
-      shown++;
+    let bars = "";
+    for (const s of raw) {
+      if (s.lane >= showUpTo) continue;
+      const cls = ["seg"];
+      if (s.contL) cls.push("contL");
+      if (s.contR) cls.push("contR");
+      if (s.important) cls.push("imp");
+      const label = (s.contL ? "◀ " : "") + esc(s.title) + (s.contR ? " ▶" : "");
+      bars += `<div class="${cls.join(" ")}" style="grid-column:${s.a + 1}/${s.b + 2};grid-row:${s.lane + 1};background:${esc(s.color)}">${label}</div>`;
     }
-    const total = sp.length + sg.length;
-    const more = total > shown ? `<div class="more">+${total - shown}</div>` : "";
+    for (const c in overflow) {
+      bars += `<div class="ovf" style="grid-column:${+c + 1};grid-row:${showUpTo + 1}">+${overflow[c]}</div>`;
+    }
 
-    html += `<div class="${cls.join(" ")}" data-key="${key}">
-      <div class="daynum">${day}</div>
-      <div class="evs">${items}${more}</div>
-    </div>`;
-  });
+    html += `<div class="week" data-wk="${w}"><div class="wk-days">${days}</div><div class="wk-bars">${bars}</div></div>`;
+  }
+  grid.innerHTML = html;
+}
+
+// 목록(아젠다) 뷰 — 오늘 이후 일정을 날짜별로 풀네임 표시
+function renderList(grid) {
+  const todayKey = ymd(new Date());
+  const byDate = {};
+  for (const [key, list] of Object.entries(STATE.events)) {
+    if (!Array.isArray(list)) continue;
+    for (const ev of list) {
+      const endKey = ev.end_date && ev.end_date > key ? ev.end_date : key;
+      if (endKey < todayKey) continue; // 이미 끝난 일정 제외
+      (byDate[key] ||= []).push(ev);
+    }
+  }
+  const keys = Object.keys(byDate).sort();
+  if (!keys.length) { grid.innerHTML = `<p class="agenda-empty">다가오는 일정이 없습니다.</p>`; return; }
+
+  const dow = ["일", "월", "화", "수", "목", "금", "토"];
+  let html = "";
+  for (const key of keys) {
+    const d = parseYmd(key);
+    const evs = byDate[key].slice().sort((a, b) =>
+      (a.important ? 0 : 1) - (b.important ? 0 : 1) || String(a.time || "").localeCompare(String(b.time || "")));
+    html += `<div class="agenda-date${key === todayKey ? " is-today" : ""}">${d.getMonth() + 1}월 ${d.getDate()}일 (${dow[d.getDay()]})</div>`;
+    for (const ev of evs) {
+      const meta = [];
+      if (ev.time && ev.time !== "00:00") meta.push(ev.time);
+      if (ev.end_date && ev.end_date > key) {
+        const ed = parseYmd(ev.end_date);
+        if (ed) meta.push(`${d.getMonth() + 1}/${d.getDate()} ~ ${ed.getMonth() + 1}/${ed.getDate()}`);
+      }
+      if (ev.memo) meta.push(ev.memo.replace(/\n/g, " "));
+      const star = ev.important ? "★ " : "";
+      html += `<div class="ev-row" data-key="${key}">
+        <span class="ev-dot" style="background:${esc(ev.color || "#a099ff")}"></span>
+        <div class="ev-info">
+          <div class="ev-title${ev.important ? " imp" : ""}">${star}${esc(ev.title || "(제목 없음)")}</div>
+          ${meta.length ? `<div class="ev-meta">${esc(meta.join("  ·  "))}</div>` : ""}
+        </div></div>`;
+    }
+  }
   grid.innerHTML = html;
 }
 
@@ -404,19 +480,34 @@ $("today").onclick = () => {
   const t = new Date(); STATE.year = t.getFullYear(); STATE.month = t.getMonth() + 1; render();
 };
 $("settings").onclick = openSettings;
+$("viewtoggle").onclick = () => { STATE.view = STATE.view === "month" ? "list" : "month"; render(); };
+
 $("grid").addEventListener("click", (e) => {
-  const cell = e.target.closest(".cell:not(.empty)");
-  if (cell) openDay(cell.dataset.key);
+  if (STATE.view === "list") {
+    const row = e.target.closest(".ev-row[data-key]");
+    if (row) openDay(row.dataset.key);
+    return;
+  }
+  const wk = e.target.closest(".week");
+  if (!wk) return;
+  const rect = wk.getBoundingClientRect();
+  let col = Math.floor((e.clientX - rect.left) / (rect.width / 7));
+  col = Math.max(0, Math.min(6, col));
+  const key = (WEEK_KEYS[+wk.dataset.wk] || [])[col];
+  if (key) openDay(key);
 });
 $("sheet-bg").addEventListener("click", (e) => { if (e.target === $("sheet-bg")) closeSheet(); });
 
-// 좌우 스와이프로 월 이동
-let touchX = null;
-$("grid").addEventListener("touchstart", (e) => { touchX = e.touches[0].clientX; }, { passive: true });
+// 좌우 스와이프로 월 이동 (월간뷰에서만)
+let touchX = null, touchY = null;
+$("grid").addEventListener("touchstart", (e) => {
+  touchX = e.touches[0].clientX; touchY = e.touches[0].clientY;
+}, { passive: true });
 $("grid").addEventListener("touchend", (e) => {
-  if (touchX == null) return;
+  if (touchX == null || STATE.view !== "month") { touchX = null; return; }
   const dx = e.changedTouches[0].clientX - touchX;
-  if (Math.abs(dx) > 60) (dx < 0 ? $("next") : $("prev")).click();
+  const dy = e.changedTouches[0].clientY - touchY;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) (dx < 0 ? $("next") : $("prev")).click();
   touchX = null;
 });
 
