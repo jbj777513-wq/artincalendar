@@ -90,6 +90,20 @@ class Sync {
       return r.ok;
     } catch { return false; }
   }
+  // 바뀐 날짜 하나만 쓰기 — 전체 PUT은 다른 기기·ERP가 방금 쓴 일정을 덮어쓸 수 있음
+  async saveDay(key) {
+    try {
+      const url = `${this.base()}/${encodeURIComponent(key)}.json`;
+      const list = STATE.events[key];
+      const r = list && list.length
+        ? await fetch(url, {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(list),
+          })
+        : await fetch(url, { method: "DELETE" });
+      return r.ok;
+    } catch { return false; }
+  }
   start() {
     this.stop();
     const onMsg = (ev) => {
@@ -133,10 +147,10 @@ class Sync {
 
 const sync = new Sync(() => render());
 
-async function saveAll() {
+async function saveAll(key) {
   cacheEvents();
   render();
-  await sync.save(STATE.events);
+  await sync.saveDay(key);
 }
 
 // ── 렌더링 ─────────────────────────────────────────────
@@ -319,15 +333,15 @@ function openDay(key) {
   const dow = ["일", "월", "화", "수", "목", "금", "토"][d.getDay()];
   const direct = STATE.events[key] || [];
 
-  // 다른 시작일의 다중일정 중 이 날짜를 포함하는 것(읽기전용)
-  const readonly = [];
+  // 다른 시작일의 다중일정 중 이 날짜를 포함하는 것 — 어느 날짜에서든 수정 가능
+  const spans = [];
   for (const [sk, list] of Object.entries(STATE.events)) {
     if (sk === key || !Array.isArray(list)) continue;
     const sd = parseYmd(sk); if (!sd) continue;
-    for (const ev of list) {
+    list.forEach((ev, idx) => {
       const ed = ev.end_date ? parseYmd(ev.end_date) : null;
-      if (ed && sd < d && d <= ed) readonly.push(ev);
-    }
+      if (ed && sd < d && d <= ed) spans.push({ sk, idx, ev });
+    });
   }
 
   let rows = "";
@@ -335,7 +349,7 @@ function openDay(key) {
     .map((ev, i) => ({ ev, i }))
     .sort((a, b) => (a.ev.important ? 0 : 1) - (b.ev.important ? 0 : 1));
   for (const { ev, i } of sorted) rows += evRow(ev, i, false);
-  for (const ev of readonly) rows += evRow(ev, -1, true);
+  spans.forEach(({ ev }, si) => { rows += evRow(ev, si, false, true); });
   if (!rows) rows = `<p class="sub">등록된 일정이 없습니다.</p>`;
 
   openSheet(`
@@ -348,11 +362,17 @@ function openDay(key) {
   $("close-day").onclick = closeSheet;
   $("add-ev").onclick = () => openEditor(key, null);
   $("sheet").querySelectorAll("[data-edit]").forEach((b) => {
-    b.onclick = () => openEditor(key, +b.dataset.edit);
+    b.onclick = () => openEditor(key, +b.dataset.edit, key);
+  });
+  $("sheet").querySelectorAll("[data-edit-span]").forEach((b) => {
+    b.onclick = () => {
+      const { sk, idx } = spans[+b.dataset.editSpan];
+      openEditor(sk, idx, key); // 원본 시작일 기준으로 수정, 취소하면 이 날짜로 복귀
+    };
   });
 }
 
-function evRow(ev, idx, readonly) {
+function evRow(ev, idx, readonly, isSpan) {
   const meta = [];
   if (ev.time && ev.time !== "00:00") meta.push(ev.time);
   if (ev.end_date) meta.push("~" + ev.end_date);
@@ -360,7 +380,8 @@ function evRow(ev, idx, readonly) {
   const imp = impLabel(ev);
   const impCls = imp ? " imp" : "";
   const star = imp ? imp + " " : "";
-  const editBtn = readonly ? "" : `<button class="ev-edit" data-edit="${idx}">✎</button>`;
+  const editBtn = readonly ? "" :
+    `<button class="ev-edit" data-${isSpan ? "edit-span" : "edit"}="${idx}">✎</button>`;
   return `<div class="ev-row${readonly ? " readonly" : ""}">
     <span class="ev-dot" style="background:${esc(ev.color || "#a099ff")}"></span>
     <div class="ev-info">
@@ -371,7 +392,7 @@ function evRow(ev, idx, readonly) {
 }
 
 // ── 일정 추가/수정 ─────────────────────────────────────
-function openEditor(key, idx) {
+function openEditor(key, idx, backKey) {
   const editing = idx != null && idx >= 0;
   const ev = editing ? { ...STATE.events[key][idx] } : { color: "#a099ff" };
 
@@ -412,7 +433,7 @@ function openEditor(key, idx) {
     };
   });
 
-  $("f-cancel").onclick = () => openDay(key);
+  $("f-cancel").onclick = () => openDay(backKey || key);
   $("f-save").onclick = () => {
     const title = $("f-title").value.trim();
     if (!title) { $("f-title").focus(); return; }
@@ -428,14 +449,14 @@ function openEditor(key, idx) {
     if (!Array.isArray(STATE.events[key])) STATE.events[key] = [];
     if (editing) STATE.events[key][idx] = out;
     else STATE.events[key].push(out);
-    saveAll();
+    saveAll(key);
     closeSheet();
   };
   if (editing) {
     $("f-del").onclick = () => {
       STATE.events[key].splice(idx, 1);
       if (STATE.events[key].length === 0) delete STATE.events[key];
-      saveAll();
+      saveAll(key);
       closeSheet();
     };
   }

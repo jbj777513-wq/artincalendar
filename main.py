@@ -738,8 +738,8 @@ class ArtInCalendar(QMainWindow):
         key = d.strftime("%Y-%m-%d")
         direct_events = list(self.events.get(key, []))
 
-        # 다중일정 중 이 날짜가 중간/종료일인 이벤트를 읽기 전용으로 수집
-        span_readonly = []
+        # 다중일정 중 이 날짜가 중간/종료일인 이벤트 — 어느 날짜에서든 수정 가능
+        span_events = []
         for start_key, ev_list in self.events.items():
             try:
                 start_d = date.fromisoformat(start_key)
@@ -747,7 +747,7 @@ class ArtInCalendar(QMainWindow):
                 continue
             if start_d == d:
                 continue   # 이미 direct_events에 포함
-            for ev in ev_list:
+            for i, ev in enumerate(ev_list):
                 end_str = ev.get("end_date", "")
                 if not end_str:
                     continue
@@ -756,17 +756,18 @@ class ArtInCalendar(QMainWindow):
                 except Exception:
                     continue
                 if start_d < d <= end_d:
-                    # 읽기 전용 표시용 — 원본 시작일 정보 첨부
-                    ev_copy = dict(ev)
-                    ev_copy["_span_start"] = start_key   # 내부 표시용 메타
-                    span_readonly.append((start_key, ev_copy))
+                    # 원본 위치(시작일 키 + 인덱스) 첨부 — 수정 시 원본을 갱신
+                    span_events.append((start_key, i, dict(ev)))
 
-        dlg = EventDialog(d, direct_events, span_readonly, self)
+        dlg = EventDialog(d, direct_events, span_events, self)
         if dlg.exec_():
-            self.events[key] = dlg.result_events
+            if dlg.result_events:
+                self.events[key] = dlg.result_events
+            else:
+                self.events.pop(key, None)
             self._save_local()
             if hasattr(self, "firebase") and self.firebase:
-                self.firebase.push_events(self.events)
+                self.firebase.push_date(key, dlg.result_events)
             self._refresh_calendar()
 
     # ── Firebase / 로컬 저장 ─────────────────────────────────
@@ -1367,11 +1368,11 @@ class EditEventDialog(QDialog):
 #  일정 추가/편집 다이얼로그
 # ════════════════════════════════════════════════════════════
 class EventDialog(QDialog):
-    def __init__(self, day: date, events: list, span_readonly: list = None, parent=None):
+    def __init__(self, day: date, events: list, span_events: list = None, parent=None):
         super().__init__(parent)
         self.day           = day
         self.result_events = list(events)
-        self.span_readonly = span_readonly or []   # [(start_key, ev_dict), ...]
+        self.span_events   = span_events or []   # [(start_key, idx, ev_dict), ...] 다중일정(다른 시작일)
         self.setWindowTitle(f"{day.strftime('%Y년 %m월 %d일')} 일정")
         self.setFixedSize(460, 620)
         self.setStyleSheet("""
@@ -1503,7 +1504,7 @@ class EventDialog(QDialog):
             item = self.ev_layout.takeAt(0)
             if item.widget(): item.widget().deleteLater()
 
-        has_any = bool(self.result_events) or bool(self.span_readonly)
+        has_any = bool(self.result_events) or bool(self.span_events)
 
         if not has_any:
             self.ev_layout.addWidget(
@@ -1563,8 +1564,8 @@ class EventDialog(QDialog):
                 "background:rgba(255,255,255,0.05);border-radius:8px;padding:2px;")
             self.ev_layout.addWidget(card)
 
-        # ── 다중일정 연장 표시 (읽기 전용 — 시작일에서 수정)
-        for start_key, ev in self.span_readonly:
+        # ── 다중일정 연장 표시 (어느 날짜에서든 수정 가능)
+        for si, (start_key, _idx, ev) in enumerate(self.span_events):
             color = ev.get("color", "#a099ff")
             row   = QHBoxLayout()
             dot   = QLabel("↔"); dot.setStyleSheet(f"color:{color};font-size:11px;"); dot.setFixedWidth(18)
@@ -1573,10 +1574,15 @@ class EventDialog(QDialog):
             if ev.get("memo"): body += f"\n📝 {ev['memo']}"
             lbl = QLabel(body); lbl.setWordWrap(True)
             lbl.setStyleSheet("font-size:11px; color:rgba(255,255,255,0.7);")
-            hint = QLabel("시작일에서 수정")
-            hint.setStyleSheet(
-                "font-size:9px; color:rgba(255,200,100,0.6); padding-right:2px;")
-            row.addWidget(dot); row.addWidget(lbl, 1); row.addWidget(hint)
+
+            btn_edit = QPushButton("✏"); btn_edit.setFixedSize(24, 24)
+            btn_edit.setStyleSheet(
+                "QPushButton{background:rgba(108,99,255,0.3);color:#c0bbff;"
+                "border-radius:12px;border:none;font-size:11px;}"
+                "QPushButton:hover{background:rgba(108,99,255,0.6);}")
+            btn_edit.clicked.connect(lambda _, s=si: self._edit_span(s))
+
+            row.addWidget(dot); row.addWidget(lbl, 1); row.addWidget(btn_edit)
             card = QWidget(); card.setLayout(row)
             card.setStyleSheet(
                 "background:rgba(255,255,255,0.03);border-radius:8px;padding:2px;"
@@ -1589,6 +1595,30 @@ class EventDialog(QDialog):
         if dlg.exec_():
             self.result_events[idx] = dlg.ev
             self._render_events()
+
+    def _edit_span(self, si):
+        """다른 시작일의 다중일정 수정 — 원본 시작일 기준으로 편집, 즉시 저장·동기화"""
+        start_key, idx, ev = self.span_events[si]
+        try:
+            start_d = date.fromisoformat(start_key)
+        except Exception:
+            return
+        dlg = EditEventDialog(start_d, ev, self)
+        if not dlg.exec_():
+            return
+        mw = self.parent()
+        try:
+            mw.events[start_key][idx] = dlg.ev
+        except Exception:
+            return
+        mw._save_local()
+        if getattr(mw, "firebase", None):
+            mw.firebase.push_date(start_key, mw.events[start_key])
+        mw._refresh_calendar()
+        if getattr(mw, "view", "") == "list":
+            mw._refresh_list()
+        self.span_events[si] = (start_key, idx, dict(dlg.ev))
+        self._render_events()
 
     def _del(self, idx):
         self.result_events.pop(idx); self._render_events()

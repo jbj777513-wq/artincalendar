@@ -61,7 +61,7 @@ class FirebaseSync:
                 self.on_update({})
 
     def push_events(self, events: dict):
-        """로컬 이벤트 → Firebase 업로드"""
+        """로컬 이벤트 → Firebase 업로드 (전체 트리 — 초기화 등 특수한 경우만 사용)"""
         if not self.db:
             return
         def _push():
@@ -69,6 +69,21 @@ class FirebaseSync:
                 self.db.child(self._path).set(events)
             except Exception as e:
                 print(f"[Firebase] 업로드 실패: {e}")
+        threading.Thread(target=_push, daemon=True).start()
+
+    def push_date(self, date_key: str, ev_list):
+        """바뀐 날짜 하나만 업로드 — 전체 PUT은 다른 기기·ERP가 방금 쓴 일정을 덮어쓸 수 있음"""
+        if not self.db:
+            return
+        def _push():
+            try:
+                node = self.db.child(self._path).child(date_key)
+                if ev_list:
+                    node.set(ev_list)
+                else:
+                    node.remove()
+            except Exception as e:
+                print(f"[Firebase] 업로드 실패({date_key}): {e}")
         threading.Thread(target=_push, daemon=True).start()
 
     def stop(self):
