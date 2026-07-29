@@ -27,6 +27,14 @@ jobs:
         run: |
           pip install PyQt5 pyrebase4 requests pyinstaller
 
+      - name: Stamp version into updater (code-embedded version = source of truth)
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $src = Get-Content updater.py -Raw -Encoding utf8
+          $src = $src -replace 'BASE_VERSION = "[^"]*"', "BASE_VERSION = `"$version`""
+          Set-Content -Path updater.py -Value $src -Encoding utf8
+        shell: pwsh
+
       - name: Build EXE
         run: |
           python -m PyInstaller artincalendar.spec

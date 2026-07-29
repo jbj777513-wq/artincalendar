@@ -61,8 +61,12 @@ def _version_file():
 def get_current_version():
     """
     현재 버전을 반환.
-    EXE 폴더의 version.txt → 없으면 BASE_VERSION 사용.
+    빌드 시 BASE_VERSION이 실제 버전으로 스탬프됨(build.yml) — 코드에 박힌 버전이 진실.
+    version.txt는 파일 교체가 실패한 '유령 업데이트' 때 실제보다 높게 거짓말할 수
+    있으므로, 스탬프된 빌드에서는 BASE_VERSION을 우선한다.
     """
+    if _is_frozen() and BASE_VERSION != "1.0.0":
+        return BASE_VERSION
     vf = _version_file()
     if vf.exists():
         try:
@@ -222,14 +226,18 @@ def _schedule_exe_update(tmp_dir, extract_dir, target_version=""):
     current_pid = os.getpid()
     ver_clean   = target_version.lstrip("v")
     ver_file    = str(_version_file())
+    log_file    = os.path.join(tempfile.gettempdir(), "aic_update.log")
 
     # 배치 스크립트
+    # 주의: cmd는 bat을 시스템 ANSI 코드페이지(한국어=CP949)로 파싱한다.
+    #   UTF-8로 저장하면 한글 경로/주석 라인이 깨져 robocopy가 실행되지 않는 유령
+    #   업데이트(version.txt만 갱신, 파일은 구버전)가 발생 — 반드시 mbcs로 쓰고
+    #   주석은 ASCII만 사용.
     bat_path = os.path.join(tmp_dir, "apply.bat")
     lines = [
         "@echo off",
-        "chcp 65001 > nul",
         "",
-        ":: 현재 EXE 종료 대기",
+        ":: wait for current exe to exit",
         ":waitloop",
         f'tasklist /FI "PID eq {current_pid}" /NH 2>nul | findstr "{current_pid}" >nul',
         "if not errorlevel 1 (",
@@ -237,25 +245,26 @@ def _schedule_exe_update(tmp_dir, extract_dir, target_version=""):
         "    goto waitloop",
         ")",
         "",
-        ":: 1초 추가 대기",
         "timeout /t 1 /nobreak > nul",
         "",
-        ":: 새 버전 파일 복사",
-        f'robocopy "{extract_dir}" "{app_dir}" /E /IS /IT /IM /NFL /NDL /NJH /NJS > nul 2>&1',
+        ":: copy new files (log kept for troubleshooting)",
+        f'echo ===== update {ver_clean} %date% %time% ===== >> "{log_file}"',
+        f'robocopy "{extract_dir}" "{app_dir}" /E /IS /IT /IM /R:3 /W:2 /NFL /NDL /NJH /NJS >> "{log_file}" 2>&1',
+        f'echo robocopy exit %errorlevel% >> "{log_file}"',
         "",
-        ":: version.txt 갱신 (핵심: 다음 실행 시 최신 버전으로 인식)",
+        ":: update version.txt",
         f'echo {ver_clean}> "{ver_file}"',
         "",
-        ":: Windows 아이콘 캐시 갱신 (EXE 아이콘 즉시 반영)",
+        ":: refresh icon cache",
         'ie4uinit.exe -show > nul 2>&1',
         "",
-        ":: 재시작",
+        ":: restart app",
         f'start "" "{exe_path}"',
         "",
         'del "%~f0" > nul 2>&1',
     ]
 
-    with open(bat_path, "w", encoding="utf-8") as f:
+    with open(bat_path, "w", encoding="mbcs") as f:
         f.write("\r\n".join(lines))
 
     # VBScript로 배치 실행 (창 없이 백그라운드)
