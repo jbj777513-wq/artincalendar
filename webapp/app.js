@@ -158,6 +158,7 @@ let WEEK_KEYS = []; // [weekIdx][col] = "YYYY-MM-DD" | null  (월간뷰 클릭 �
 
 function render() {
   const grid = $("grid");
+  if (!grid) return; // 은퇴 화면으로 교체된 뒤 늦게 도착한 업데이트 무시
   const prev = $("prev"), next = $("next"), today = $("today");
   const wd = document.querySelector(".weekdays");
   if (STATE.view === "list") {
@@ -535,17 +536,67 @@ $("grid").addEventListener("touchend", (e) => {
   touchX = null;
 });
 
+// ── 앱 은퇴 (ERP 대체) ─────────────────────────────────
+const RETIRED_KEY = "aic_retired";
+
+function showRetiredScreen() {
+  try { sync.stop(); } catch {}
+  document.body.innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                min-height:100vh;padding:32px;text-align:center;gap:16px;">
+      <div style="font-size:48px;">📅</div>
+      <h2 style="margin:0;">아트인캘린더 종료 안내</h2>
+      <p style="margin:0;line-height:1.7;opacity:.8;">
+        아트인캘린더는 <b>ERP</b>로 대체되었습니다.<br>
+        앱 데이터 정리가 완료되었습니다.<br><br>
+        홈 화면에서 <b>아트인캘린더 아이콘을 길게 눌러</b><br>
+        <b>'앱 삭제'</b>를 해주세요. (iPhone·Android 동일)
+      </p>
+    </div>`;
+}
+
+async function retireNow() {
+  try {
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const r of regs) await r.unregister();
+    }
+  } catch {}
+  try {
+    if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
+  } catch {}
+  try { localStorage.clear(); } catch {}
+  try { localStorage.setItem(RETIRED_KEY, "1"); } catch {}
+  showRetiredScreen();
+}
+
+function openRetirePrompt() {
+  openSheet(`
+    <h2>📢 안내</h2>
+    <p class="sub" style="line-height:1.7;">아트인캘린더는 <b>ERP</b>로 대체되었습니다.<br>삭제하시겠습니까?</p>
+    <div class="btns">
+      <button class="btn ghost" id="r-cancel">취소</button>
+      <button class="btn danger" id="r-ok">확인</button>
+    </div>
+  `);
+  $("r-cancel").onclick = closeSheet;
+  $("r-ok").onclick = retireNow;
+}
+
 // ── 부팅 ───────────────────────────────────────────────
 (async function boot() {
+  if (localStorage.getItem(RETIRED_KEY)) { showRetiredScreen(); return; }
   STATE.events = loadCache();
   render();
+  openRetirePrompt(); // ERP 대체 안내 — 매 실행 시 표시
   const data = await sync.load();
+  if (localStorage.getItem(RETIRED_KEY)) return; // 로딩 중 삭제 확인한 경우
   if (data) { STATE.events = data; cacheEvents(); render(); }
   sync.start();
 })();
 
 // ── 서비스워커 등록 + 자동 업데이트 ────────────────────
-if ("serviceWorker" in navigator) {
+if ("serviceWorker" in navigator && !localStorage.getItem(RETIRED_KEY)) {
   window.addEventListener("load", () => {
     const hadController = !!navigator.serviceWorker.controller;
     let reloaded = false;

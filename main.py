@@ -2101,6 +2101,69 @@ class UpdateDialog(QDialog):
 
 
 # ── 진입점 ───────────────────────────────────────────────────
+def _self_delete_and_exit():
+    """앱 자체 삭제 — 종료 대기 후 설치 폴더·로컬 데이터를 지우는 bat을 띄우고 종료.
+
+    주의: bat은 반드시 mbcs(시스템 ANSI) 인코딩으로 저장해야 한다.
+    숨김 콘솔은 시스템 OEM 코드페이지(한국어=CP949)로 bat을 파싱하므로
+    UTF-8로 쓰면 한글 경로 라인이 깨져 실행되지 않는다. (updater.py와 동일 규칙)
+    """
+    _set_autostart(False)   # 시작프로그램 등록 해제 (삭제된 exe 실행 시도 방지)
+
+    if not getattr(sys, "frozen", False):
+        # 개발 실행: 소스 폴더를 지우면 안 되므로 종료만
+        os._exit(0)
+
+    import tempfile
+    import subprocess
+    app_dir  = str(Path(sys.executable).resolve().parent)
+    events_f = str(Path.home() / ".artincalendar_events.json")
+    config_f = str(Path.home() / ".artincalendar_config.json")
+    pid      = os.getpid()
+
+    bat_path = os.path.join(tempfile.gettempdir(), "aic_remove.bat")
+    lines = [
+        "@echo off",
+        "",
+        ":: wait for app exit",
+        ":waitloop",
+        f'tasklist /FI "PID eq {pid}" /NH 2>nul | findstr "{pid}" >nul',
+        "if not errorlevel 1 (",
+        "    timeout /t 1 /nobreak > nul",
+        "    goto waitloop",
+        ")",
+        "timeout /t 1 /nobreak > nul",
+        "",
+        ":: remove app folder and local data",
+        f'rmdir /s /q "{app_dir}"',
+        f'del /q "{events_f}" > nul 2>&1',
+        f'del /q "{config_f}" > nul 2>&1',
+        "",
+        'del "%~f0" > nul 2>&1',
+    ]
+    with open(bat_path, "w", encoding="mbcs") as f:
+        f.write("\r\n".join(lines))
+
+    CREATE_NO_WINDOW = 0x08000000
+    subprocess.Popen(["cmd", "/c", bat_path],
+                     creationflags=CREATE_NO_WINDOW, close_fds=True)
+    os._exit(0)
+
+
+def _retire_prompt():
+    """앱 은퇴 안내 — 매 실행 시 표시, 확인을 누르면 앱을 삭제한다."""
+    box = QMessageBox()
+    box.setWindowTitle("아트인캘린더")
+    box.setText("아트인캘린더는 ERP로 대체되었습니다.\n삭제하시겠습니까?")
+    box.setIcon(QMessageBox.Question)
+    btn_ok     = box.addButton("확인", QMessageBox.AcceptRole)
+    btn_cancel = box.addButton("취소", QMessageBox.RejectRole)
+    box.setDefaultButton(btn_cancel)
+    box.exec_()
+    if box.clickedButton() is btn_ok:
+        _self_delete_and_exit()
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
@@ -2109,6 +2172,9 @@ if __name__ == "__main__":
     from PyQt5.QtGui import QFont as _QFont
     default_font = _QFont("Pretendard", 10)
     app.setFont(default_font)
+
+    # ERP 대체 안내 팝업 (확인 → 앱 삭제)
+    _retire_prompt()
 
     # 비밀번호 확인 (password.txt가 있을 때만)
     if password_required():
